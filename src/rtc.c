@@ -3,6 +3,15 @@
 #include "string_util.h"
 #include "text.h"
 
+// In-game clock runs this many times faster than the (pseudo-)RTC.
+#define TIME_SCALE 4
+
+// Always use the fixed day count, so the berry glitch can't freeze time
+// if the cart's pseudo-RTC date crosses into 2001.
+#ifndef BUGFIX_BERRY
+#define BUGFIX_BERRY
+#endif
+
 static u16 sErrorStatus;
 static struct SiiRtcInfo sRtc;
 static u8 sProbeResult;
@@ -292,11 +301,21 @@ void debug_sub_80098B8(u8 *dest)
 
 void RtcCalcTimeDifference(struct SiiRtcInfo *rtc, struct Time *result, struct Time *t)
 {
+    // Scale the RTC reading before subtracting the offset, so the in-game
+    // clock (and everything that reads gLocalTime) runs TIME_SCALE times faster.
     u16 days = RtcGetDayCount(rtc);
-    result->seconds = ConvertBcdToBinary(rtc->second) - t->seconds;
-    result->minutes = ConvertBcdToBinary(rtc->minute) - t->minutes;
-    result->hours = ConvertBcdToBinary(rtc->hour) - t->hours;
-    result->days = days - t->days;
+    u32 secOfDay = ConvertBcdToBinary(rtc->hour) * 3600
+                 + ConvertBcdToBinary(rtc->minute) * 60
+                 + ConvertBcdToBinary(rtc->second);
+
+    u32 scaled = secOfDay * TIME_SCALE;
+    u16 scaledDays = days * TIME_SCALE + scaled / 86400; // wraps mod 65536; the offset wraps the same way
+    scaled %= 86400;
+
+    result->seconds = (scaled % 60)        - t->seconds;
+    result->minutes = ((scaled / 60) % 60) - t->minutes;
+    result->hours   = (scaled / 3600)      - t->hours;
+    result->days    = scaledDays           - t->days;
 
     if (result->seconds < 0)
     {
